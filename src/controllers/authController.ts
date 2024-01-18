@@ -7,12 +7,16 @@ import { RegisterRequest, RegisterResponse, LoginRequest, LoginResponse, AuthErr
 /**
  * Controller function for user registration.
  */
+
 export const register = async (req: Request<{}, {}, RegisterRequest>, res: Response<RegisterResponse | AuthErrorResponse>) => {
   try {
-    const { name, email, password, username, imagePath } = req.body;
+    const { first_name, last_name, email, password, username, phone_number, date_of_birth, role, cpf, rg } = req.body;
 
     const userExists = await queryAsync('SELECT * FROM users WHERE username = ?', [username]);
     const emailExists = await queryAsync('SELECT * FROM users WHERE email = ?', [email]);
+    const phoneExists = await queryAsync('SELECT * FROM users WHERE phone_number = ?', [phone_number]);
+    const cpfExists = await queryAsync('SELECT * FROM users WHERE cpf = ?', [cpf]);
+    const rgExists = await queryAsync('SELECT * FROM users WHERE rg = ?', [rg]);
 
     if (userExists.length > 0) {
       return res.status(400).json({ error: 'Nome de usuário já em uso' });
@@ -22,9 +26,23 @@ export const register = async (req: Request<{}, {}, RegisterRequest>, res: Respo
       return res.status(400).json({ error: 'E-mail já em uso' });
     }
 
+    if (phoneExists.length > 0) {
+      return res.status(400).json({ error: 'Celular já em uso' });
+    }
+
+    if (cpfExists.length > 0) {
+      return res.status(400).json({ error: 'CPF já em uso' });
+    }
+
+    if (rgExists.length > 0) {
+      return res.status(400).json({ error: 'RG já em uso' });
+    }
+
+    const userRole = role == 'admin' ? 'admin' : 'user'
+
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    await queryAsync('INSERT INTO users (name, email, password, username, user_image) VALUES (?, ?, ?, ?, ?)', [name, email, hashedPassword, username, imagePath]);
+    await queryAsync('INSERT INTO users (username, password_hash, email, first_name, last_name, phone_number, date_of_birth, role, cpf, rg, user_image) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [username, hashedPassword, email, first_name, last_name, phone_number, date_of_birth, userRole, cpf, rg, req.body.imagePath ? req.body.imagePath : null]);
 
     res.status(201).json({ message: 'Usuário registrado com sucesso' });
   } catch (error) {
@@ -40,31 +58,34 @@ export const login = async (req: Request<{}, {}, LoginRequest>, res: Response<Lo
   try {
     const { username, password } = req.body;
 
-    const results = await queryAsync('SELECT * FROM users WHERE username = ?', [username]);
+    // Fetch user from the database
+    const [user] = await queryAsync('SELECT id, password_hash, email, first_name, last_name, username, user_image FROM users WHERE username = ?', [username]);
 
-    if (results.length > 0) {
-      const match = await bcrypt.compare(password, results[0].password);
+    if (user) {
+      const isPasswordValid = await bcrypt.compare(password, user.password_hash);
 
-      if (match) {
+      if (isPasswordValid) {
         const expirationTime = 3600; // 1 hour in seconds
+
+        // Create JWT token
         const token = jwt.sign(
-          { username: results[0].username, id: results[0].id },
+          { username: user.username, id: user.id },
           process.env.JWT_SECRET as string,
           { expiresIn: expirationTime }
         );
 
-        const userData: UserData = {
-          email: results[0].email,
-          name: results[0].name,
-          username: results[0].username,
-          user_image: results[0].user_image,
-        };
+        // Extract relevant user data
+        const { email, first_name, last_name, username, user_image } = user;
 
+        // Send a clean response with token and user data
+        const userData: UserData = { email, first_name, last_name, username, user_image };
         res.status(200).json({ token, userData, expiresIn: expirationTime });
       } else {
+        // Incorrect password
         res.status(401).json({ error: 'Credenciais inválidas' });
       }
     } else {
+      // User not found
       res.status(401).json({ error: 'Credenciais inválidas' });
     }
   } catch (error) {
